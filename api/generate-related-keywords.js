@@ -130,17 +130,24 @@ export default async function handler(req, res) {
     debug.steps.push(`After combinations: ${allKeywords.size}`);
     
     // Sort and deduplicate
-    const keywords = Array.from(allKeywords.entries())
+    let keywords = Array.from(allKeywords.entries())
       .filter(([keyword]) => isValidKeyword(keyword, new Map()))
       .sort((a, b) => b[1] - a[1])
       .map(([keyword]) => keyword)
       .slice(0, 50);
 
-    // Final deduplication
-    const uniqueKeywords = Array.from(new Set(keywords));
-    debug.steps.push(`Final (after dedup): ${uniqueKeywords.length}`);
+    // Final deduplication and filter: no keyword can contain both a file format and a product type
+    const formats = KEYWORD_CATEGORIES.fileFormats;
+    const productTypes = KEYWORD_CATEGORIES.productTypes;
+    const finalKeywords = keywords.filter(kw => {
+      const parts = kw.trim().split(/\s+/);
+      const hasFormat = parts.some(p => formats.includes(p));
+      const hasType = parts.some(p => productTypes.includes(p));
+      return !(hasFormat && hasType);
+    });
+    debug.steps.push(`Final (after dedup and format/type filter): ${finalKeywords.length}`);
     
-    return res.status(200).json({ keywords: uniqueKeywords, debug });
+    return res.status(200).json({ keywords: finalKeywords, debug });
   } catch (error) {
     console.error('Error:', error);
     return res.status(500).json({ 
