@@ -173,45 +173,25 @@ function shuffleArray(array) {
 function detectContext(mainKeyword, description) {
   const fullText = `${mainKeyword} ${description}`.toLowerCase();
 
-  // Prioritize keywordTypes mentioned in description or mainKeyword
-  const allKeywordTypes = KEYWORD_CATEGORIES.keywordTypes.filter(f =>
-    fullText.includes(f)
-  );
+  // Find all keywordTypes mentioned
+  const mentionedKeywordTypes = KEYWORD_CATEGORIES.keywordTypes.filter(type => fullText.includes(type));
   // If none mentioned, use default top 3
-  const mentionedKeywordTypes = allKeywordTypes.length ? allKeywordTypes : KEYWORD_CATEGORIES.keywordTypes.slice(0, 3);
+  const prioritizedKeywordTypes = mentionedKeywordTypes.length ? mentionedKeywordTypes : KEYWORD_CATEGORIES.keywordTypes.slice(0, 3);
 
-  const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s =>
-    fullText.includes(s)
-  );
+  const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s => fullText.includes(s));
+  const mentionedUsage = KEYWORD_CATEGORIES.usage.filter(u => fullText.includes(u));
 
-  const mentionedUsage = KEYWORD_CATEGORIES.usage.filter(u =>
-    fullText.includes(u)
-  );
-
-  const hasDigitalKeywords =
-    mentionedKeywordTypes.length > 0 ||
-    fullText.includes('digital') ||
-    fullText.includes('download') ||
-    fullText.includes('cricut') ||
-    fullText.includes('silhouette') ||
-    fullText.includes('clipart') ||
-    fullText.includes('graphic');
-
-  // Extract core words from main keyword and description, prioritizing keywordTypes and styles
-  let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w));
-  let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w =>
-    w.length > 2 && !FILLER_WORDS.has(w) && !mentionedKeywordTypes.includes(w) && !coreWords.includes(w)
-  );
-  // Add prioritized keywordTypes and styles from description
-  descWords = [...new Set([...descWords, ...mentionedKeywordTypes, ...mentionedStyles])];
+  // Extract core words from main keyword and description, EXCLUDING any keywordTypes
+  let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w) && !KEYWORD_CATEGORIES.keywordTypes.includes(w));
+  let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w => w.length > 2 && !FILLER_WORDS.has(w) && !KEYWORD_CATEGORIES.keywordTypes.includes(w) && !coreWords.includes(w));
+  // Add prioritized styles from description
+  descWords = [...new Set([...descWords, ...mentionedStyles])];
   // Remove duplicates
   coreWords = [...new Set(coreWords.concat(descWords))];
 
   return {
-    isDigital: hasDigitalKeywords,
     coreWords,
-    descWords,
-    mentionedKeywordTypes,
+    mentionedKeywordTypes: prioritizedKeywordTypes,
     mentionedStyles,
     mentionedUsage,
     hasBundle: fullText.includes('bundle') || fullText.includes('set'),
@@ -226,18 +206,14 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
   // 1. Main/related word + keywordType
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     keywordTypes.forEach(type => {
-      if (word !== type) {
-        keywords.add(`${word} ${type}`);
-      }
+      keywords.add(`${word} ${type}`);
     });
   });
 
   // 2. Style + main/related word
   context.mentionedStyles.forEach(style => {
     [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-      if (word !== style) {
-        keywords.add(`${style} ${word}`);
-      }
+      keywords.add(`${style} ${word}`);
     });
   });
 
@@ -246,18 +222,16 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     events.forEach(event => {
       keywordTypes.forEach(type => {
-        if (word !== type && event !== type) {
-          keywords.add(`${word} ${event} ${type}`);
-        }
+        keywords.add(`${word} ${event} ${type}`);
       });
     });
   });
 
-  // Remove any keyword that contains two keywordType words
+  // Remove any keyword that contains more than one keywordType word
   let result = Array.from(keywords).filter(kw => {
     const parts = kw.trim().split(/\s+/);
     const typeCount = parts.filter(p => keywordTypes.includes(p)).length;
-    return typeCount <= 1 && parts.length > 1;
+    return typeCount === 1 && parts.length > 1;
   });
 
   // If less than 50, add more event/style combos
@@ -396,19 +370,17 @@ function addSmartCombinations(allKeywords, context, relatedWordsMap) {
 
 function isValidKeyword(keyword, existingKeywords) {
   const words = keyword.trim().toLowerCase().split(/\s+/);
-  if (words.length < 2) return false; // No one-word results
+  if (words.length < 2) return false;
   if (words.length > 4) return false;
   if (keyword.length > 80) return false;
-  if (words.includes('ai')) return false; // Exclude 'ai'
-  // Check for duplicate words in the keyword
+  if (words.includes('ai')) return false;
   const wordSet = new Set(words);
   if (wordSet.size !== words.length) return false;
   if (existingKeywords.has(keyword.toLowerCase())) return false;
-  // No more hasDuplicateFormats check
   const nonFillerWords = words.filter(w => !FILLER_WORDS.has(w));
   if (nonFillerWords.length === 0) return false;
   // Only one keywordType per keyword
   const typeCount = words.filter(w => KEYWORD_CATEGORIES.keywordTypes.includes(w)).length;
-  if (typeCount > 1) return false;
+  if (typeCount !== 1) return false;
   return true;
 }
