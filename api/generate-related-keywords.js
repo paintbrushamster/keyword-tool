@@ -165,17 +165,12 @@ function shuffleArray(array) {
 function detectContext(mainKeyword, description) {
   const fullText = `${mainKeyword} ${description}`.toLowerCase();
 
-  // Prioritize file formats mentioned in description or mainKeyword
-  const allFileFormats = KEYWORD_CATEGORIES.fileFormats.filter(f =>
+  // Prioritize keywordTypes mentioned in description or mainKeyword
+  const allKeywordTypes = KEYWORD_CATEGORIES.keywordTypes.filter(f =>
     fullText.includes(f)
   );
   // If none mentioned, use default top 3
-  const mentionedFormats = allFileFormats.length ? allFileFormats : KEYWORD_CATEGORIES.fileFormats.slice(0, 3);
-
-  // Only include 'mockup' and 'pattern' if specified
-  const productTypes = KEYWORD_CATEGORIES.productTypes.filter(type =>
-    type !== 'mockup' && type !== 'pattern' || fullText.includes(type)
-  );
+  const mentionedKeywordTypes = allKeywordTypes.length ? allKeywordTypes : KEYWORD_CATEGORIES.keywordTypes.slice(0, 3);
 
   const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s =>
     fullText.includes(s)
@@ -186,7 +181,7 @@ function detectContext(mainKeyword, description) {
   );
 
   const hasDigitalKeywords =
-    mentionedFormats.length > 0 ||
+    mentionedKeywordTypes.length > 0 ||
     fullText.includes('digital') ||
     fullText.includes('download') ||
     fullText.includes('cricut') ||
@@ -194,13 +189,13 @@ function detectContext(mainKeyword, description) {
     fullText.includes('clipart') ||
     fullText.includes('graphic');
 
-  // Extract core words from main keyword and description, prioritizing file formats and styles
+  // Extract core words from main keyword and description, prioritizing keywordTypes and styles
   let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w));
   let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w =>
-    w.length > 2 && !FILLER_WORDS.has(w) && !mentionedFormats.includes(w) && !coreWords.includes(w)
+    w.length > 2 && !FILLER_WORDS.has(w) && !mentionedKeywordTypes.includes(w) && !coreWords.includes(w)
   );
-  // Add prioritized file formats and styles from description
-  descWords = [...new Set([...descWords, ...mentionedFormats, ...mentionedStyles])];
+  // Add prioritized keywordTypes and styles from description
+  descWords = [...new Set([...descWords, ...mentionedKeywordTypes, ...mentionedStyles])];
   // Remove duplicates
   coreWords = [...new Set(coreWords.concat(descWords))];
 
@@ -208,10 +203,9 @@ function detectContext(mainKeyword, description) {
     isDigital: hasDigitalKeywords,
     coreWords,
     descWords,
-    mentionedFormats,
+    mentionedKeywordTypes,
     mentionedStyles,
     mentionedUsage,
-    productTypes,
     hasBundle: fullText.includes('bundle') || fullText.includes('set'),
     hasCollection: fullText.includes('collection') || fullText.includes('pack')
   };
@@ -276,26 +270,18 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
 function addDigitalVariations(allKeywords, context, relatedWordsMap) {
   // PRIORITY: Core words must appear
   context.coreWords.forEach(coreWord => {
-    // Core word + all formats
-    context.mentionedFormats.forEach(format => {
-      const keyword = `${coreWord} ${format}`;
-      if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 90 + randomVariance(5));
-      }
-    });
-    
-    // Core word + product types
-    KEYWORD_CATEGORIES.productTypes.forEach(type => {
+    // Core word + all keywordTypes
+    context.mentionedKeywordTypes.forEach(type => {
       const keyword = `${coreWord} ${type}`;
       if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 85 + randomVariance(5));
+        allKeywords.set(keyword, 90 + randomVariance(5));
       }
     });
     
     // Core word + digital products
     KEYWORD_CATEGORIES.digitalProducts.slice(0, 6).forEach(product => {
       const keyword = `${coreWord} ${product}`;
-      if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
+      if (!allKeywords.has(keyword)) {
         allKeywords.set(keyword, 80 + randomVariance(5));
       }
     });
@@ -305,8 +291,8 @@ function addDigitalVariations(allKeywords, context, relatedWordsMap) {
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
     related.slice(0, 3).forEach(relatedWord => {
-      context.mentionedFormats.slice(0, 2).forEach(format => {
-        const keyword = `${relatedWord} ${format}`;
+      context.mentionedKeywordTypes.slice(0, 2).forEach(type => {
+        const keyword = `${relatedWord} ${type}`;
         if (!allKeywords.has(keyword)) {
           allKeywords.set(keyword, 75 + randomVariance(5));
         }
@@ -373,22 +359,12 @@ function addUsageKeywords(allKeywords, context) {
 function addSmartCombinations(allKeywords, context, relatedWordsMap) {
   // 3-word combinations with CORE words
   context.coreWords.forEach(coreWord => {
-    // Style + core + format
+    // Style + core + keywordType
     context.mentionedStyles.slice(0, 2).forEach(style => {
-      context.mentionedFormats.slice(0, 3).forEach(format => {
-        const keyword = `${style} ${coreWord} ${format}`;
-        if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
+      context.mentionedKeywordTypes.slice(0, 3).forEach(type => {
+        const keyword = `${style} ${coreWord} ${type}`;
+        if (!allKeywords.has(keyword)) {
           allKeywords.set(keyword, 72 + randomVariance(5));
-        }
-      });
-    });
-    
-    // Core + type + format
-    KEYWORD_CATEGORIES.productTypes.slice(0, 3).forEach(type => {
-      context.mentionedFormats.slice(0, 2).forEach(format => {
-        const keyword = `${coreWord} ${type} ${format}`;
-        if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
-          allKeywords.set(keyword, 70 + randomVariance(5));
         }
       });
     });
@@ -398,10 +374,10 @@ function addSmartCombinations(allKeywords, context, relatedWordsMap) {
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
     related.slice(0, 2).forEach(relatedWord => {
-      context.mentionedFormats.slice(0, 2).forEach(format => {
-        KEYWORD_CATEGORIES.productTypes.slice(0, 2).forEach(type => {
-          const keyword = `${relatedWord} ${type} ${format}`;
-          if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
+      context.mentionedKeywordTypes.slice(0, 2).forEach(type => {
+        context.mentionedStyles.slice(0, 2).forEach(style => {
+          const keyword = `${relatedWord} ${style} ${type}`;
+          if (!allKeywords.has(keyword)) {
             allKeywords.set(keyword, 68 + randomVariance(5));
           }
         });
@@ -420,14 +396,11 @@ function isValidKeyword(keyword, existingKeywords) {
   const wordSet = new Set(words);
   if (wordSet.size !== words.length) return false;
   if (existingKeywords.has(keyword.toLowerCase())) return false;
-  if (hasDuplicateFormats(keyword)) return false;
+  // No more hasDuplicateFormats check
   const nonFillerWords = words.filter(w => !FILLER_WORDS.has(w));
   if (nonFillerWords.length === 0) return false;
+  // Only one keywordType per keyword
+  const typeCount = words.filter(w => KEYWORD_CATEGORIES.keywordTypes.includes(w)).length;
+  if (typeCount > 1) return false;
   return true;
-}
-
-function hasDuplicateFormats(keyword) {
-  const words = keyword.toLowerCase().split(/\s+/);
-  const formats = words.filter(w => KEYWORD_CATEGORIES.fileFormats.includes(w));
-  return formats.length > 1;
 }
