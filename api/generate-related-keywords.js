@@ -3,17 +3,11 @@
 // ============================================
 
 const KEYWORD_CATEGORIES = {
-  fileFormats: [
-    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf' // 'ai' and 'image' removed
-  ],
-  digitalProducts: [
-    'digital download', 'instant download', 'printable', 'digital file',
-    'cricut', 'silhouette', 'sublimation',
-    'cricut design', 'silhouette cameo', 'cut file', 'cutting file',
-    'cricut file'
-  ],
-  productTypes: [
-    'clipart', 'graphic', 'design', 'illustration', 'template', 'mockup' // 'image' removed, only add 'mockup' if specified
+  keywordTypes: [
+    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf',
+    'clipart', 'graphic', 'design', 'illustration', 'template', 'mockup',
+    'cricut', 'silhouette', 'sublimation', 'cricut design', 'silhouette cameo', 'cut file', 'cutting file', 'cricut file',
+    'digital download', 'instant download', 'printable', 'digital file', 'heat transfer', 'vinyl decal'
   ],
   craftStyles: [
     'watercolor', 'hand drawn', 'hand painted', 'vintage', 'retro',
@@ -137,13 +131,11 @@ export default async function handler(req, res) {
       .slice(0, 50);
 
     // Final deduplication and filter: no keyword can contain both a file format and a product type
-    const formats = KEYWORD_CATEGORIES.fileFormats;
-    const productTypes = KEYWORD_CATEGORIES.productTypes;
+    const keywordTypes = KEYWORD_CATEGORIES.keywordTypes;
     const finalKeywords = keywords.filter(kw => {
       const parts = kw.trim().split(/\s+/);
-      const hasFormat = parts.some(p => formats.includes(p));
-      const hasType = parts.some(p => productTypes.includes(p));
-      return !(hasFormat && hasType);
+      const typeCount = parts.filter(p => keywordTypes.includes(p)).length;
+      return typeCount <= 1;
     });
     debug.steps.push(`Final (after dedup and format/type filter): ${finalKeywords.length}`);
     
@@ -227,28 +219,18 @@ function detectContext(mainKeyword, description) {
 
 function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
-  const formats = context.mentionedFormats;
-  const productTypes = context.productTypes;
+  const keywordTypes = KEYWORD_CATEGORIES.keywordTypes;
 
-  // 1. Main/related word + format
+  // 1. Main/related word + keywordType
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-    formats.forEach(format => {
-      if (word !== format) {
-        keywords.add(`${word} ${format}`);
-      }
-    });
-  });
-
-  // 2. Main/related word + product type
-  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-    productTypes.forEach(type => {
+    keywordTypes.forEach(type => {
       if (word !== type) {
         keywords.add(`${word} ${type}`);
       }
     });
   });
 
-  // 3. Style + main/related word
+  // 2. Style + main/related word
   context.mentionedStyles.forEach(style => {
     [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
       if (word !== style) {
@@ -257,22 +239,11 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // 4. Main/related word + event + format
+  // 3. Main/related word + event + keywordType
   const events = [...KEYWORD_CATEGORIES.holidays, ...KEYWORD_CATEGORIES.seasons, ...KEYWORD_CATEGORIES.occasions];
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     events.forEach(event => {
-      formats.forEach(format => {
-        if (word !== format && event !== format) {
-          keywords.add(`${word} ${event} ${format}`);
-        }
-      });
-    });
-  });
-
-  // 5. Main/related word + event + product type
-  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-    events.forEach(event => {
-      productTypes.forEach(type => {
+      keywordTypes.forEach(type => {
         if (word !== type && event !== type) {
           keywords.add(`${word} ${event} ${type}`);
         }
@@ -280,14 +251,26 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // Remove any keyword that contains both a file format and a product type
-  return Array.from(keywords).filter(kw => {
+  // Remove any keyword that contains two keywordType words
+  let result = Array.from(keywords).filter(kw => {
     const parts = kw.trim().split(/\s+/);
-    const hasFormat = parts.some(p => formats.includes(p));
-    const hasType = parts.some(p => productTypes.includes(p));
-    if (hasFormat && hasType) return false;
-    return parts.length > 1;
+    const typeCount = parts.filter(p => keywordTypes.includes(p)).length;
+    return typeCount <= 1 && parts.length > 1;
   });
+
+  // If less than 50, add more event/style combos
+  if (result.length < 50) {
+    const extras = [];
+    [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
+      events.forEach(event => {
+        context.mentionedStyles.forEach(style => {
+          extras.push(`${style} ${word} ${event}`);
+        });
+      });
+    });
+    result = [...result, ...extras].slice(0, 50);
+  }
+  return result.slice(0, 50);
 }
 
 function addDigitalVariations(allKeywords, context, relatedWordsMap) {
