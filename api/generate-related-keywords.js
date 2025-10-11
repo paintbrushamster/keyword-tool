@@ -4,18 +4,16 @@
 
 const KEYWORD_CATEGORIES = {
   fileFormats: [
-    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf', 
-    'studio', 'studio3', 'fcm' // 'ai' removed
+    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf' // 'ai' and 'image' removed
   ],
   digitalProducts: [
     'digital download', 'instant download', 'printable', 'digital file',
-    'cricut', 'silhouette', 'sublimation', 'print on demand',
+    'cricut', 'silhouette', 'sublimation',
     'cricut design', 'silhouette cameo', 'cut file', 'cutting file',
-    'heat transfer', 'vinyl decal', 'cricut file', 'silhouette file'
+    'cricut file'
   ],
   productTypes: [
-    'clipart', 'graphic', 'design', 'illustration', 'image',
-    'template', 'mockup' // Only add 'mockup' if specified
+    'clipart', 'graphic', 'design', 'illustration', 'template', 'mockup' // 'image' removed, only add 'mockup' if specified
   ],
   craftStyles: [
     'watercolor', 'hand drawn', 'hand painted', 'vintage', 'retro',
@@ -214,59 +212,59 @@ function detectContext(mainKeyword, description) {
 
 function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
+  // Merge formats and product types for second word
+  const formatTypes = [...context.mentionedFormats, ...context.productTypes].filter((v, i, arr) => arr.indexOf(v) === i);
 
-  // Always list prioritized file formats first
-  context.mentionedFormats.forEach(format => {
-    context.coreWords.forEach(word => {
-      if (word !== format) {
-        keywords.add(`${word} ${format}`);
+  // 1. Main keyword + format/product type
+  context.coreWords.forEach(word => {
+    formatTypes.forEach(type => {
+      if (word !== type) {
+        keywords.add(`${word} ${type}`);
       }
     });
   });
 
-  // Add style and clipart combinations
-  context.coreWords.forEach(word => {
-    if (context.mentionedStyles.includes('watercolor')) {
-      keywords.add(`watercolor ${word}`);
-    }
-    if (context.productTypes.includes('clipart')) {
-      keywords.add(`${word} clipart`);
-    }
-  });
-
-  // Add related words for main keyword
+  // 2. Related words + format/product type
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
     related.forEach(relatedWord => {
-      context.mentionedFormats.forEach(format => {
-        if (relatedWord !== format) {
-          keywords.add(`${relatedWord} ${format}`);
+      formatTypes.forEach(type => {
+        if (relatedWord !== type) {
+          keywords.add(`${relatedWord} ${type}`);
         }
       });
     });
   });
 
-  // Add combinations with holidays, seasons, occasions
-  context.coreWords.forEach(coreWord => {
-    KEYWORD_CATEGORIES.holidays.forEach(holiday => {
-      context.mentionedFormats.forEach(format => {
-        keywords.add(`${coreWord} ${holiday} ${format}`);
-      });
+  // 3. Style + main keyword (not style + format)
+  context.mentionedStyles.forEach(style => {
+    context.coreWords.forEach(word => {
+      if (word !== style) {
+        keywords.add(`${style} ${word}`);
+      }
     });
-    KEYWORD_CATEGORIES.seasons.forEach(season => {
-      context.mentionedFormats.forEach(format => {
-        keywords.add(`${coreWord} ${season} ${format}`);
-      });
-    });
-    KEYWORD_CATEGORIES.occasions.forEach(occasion => {
-      context.mentionedFormats.forEach(format => {
-        keywords.add(`${coreWord} ${occasion} ${format}`);
+  });
+
+  // 4. Main keyword + holiday/season/occasion + format/product type
+  context.coreWords.forEach(word => {
+    [...KEYWORD_CATEGORIES.holidays, ...KEYWORD_CATEGORIES.seasons, ...KEYWORD_CATEGORIES.occasions].forEach(event => {
+      formatTypes.forEach(type => {
+        if (word !== type && event !== type) {
+          keywords.add(`${word} ${event} ${type}`);
+        }
       });
     });
   });
 
-  // Remove one-word results
-  return Array.from(keywords).filter(kw => kw.trim().split(/\s+/).length > 1);
+  // Remove one-word results and any where both words are formats/product types
+  return Array.from(keywords).filter(kw => {
+    const parts = kw.trim().split(/\s+/);
+    if (parts.length < 2) return false;
+    // Only allow format/product type as second/third word, not both
+    if (parts.length === 2 && formatTypes.includes(parts[0]) && formatTypes.includes(parts[1])) return false;
+    if (parts.length === 3 && formatTypes.includes(parts[1]) && formatTypes.includes(parts[2])) return false;
+    return true;
+  });
 }
 
 function addDigitalVariations(allKeywords, context, relatedWordsMap) {
