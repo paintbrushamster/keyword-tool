@@ -184,10 +184,15 @@ function detectContext(mainKeyword, description) {
   // Extract core words from main keyword and description, EXCLUDING any keywordTypes
   let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w) && !KEYWORD_CATEGORIES.keywordTypes.includes(w));
   let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w => w.length > 2 && !FILLER_WORDS.has(w) && !KEYWORD_CATEGORIES.keywordTypes.includes(w) && !coreWords.includes(w));
-  // Add prioritized styles from description
   descWords = [...new Set([...descWords, ...mentionedStyles])];
-  // Remove duplicates
   coreWords = [...new Set(coreWords.concat(descWords))];
+
+  // Fallback if no coreWords
+  if (coreWords.length === 0) {
+    // Use a generic fallback word or the user's input minus keywordTypes
+    const fallback = mainKeyword.toLowerCase().split(/\s+/).filter(w => !KEYWORD_CATEGORIES.keywordTypes.includes(w) && !FILLER_WORDS.has(w));
+    coreWords = fallback.length ? fallback : ['design', 'art', 'craft'];
+  }
 
   return {
     coreWords,
