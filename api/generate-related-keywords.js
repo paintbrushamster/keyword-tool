@@ -212,23 +212,45 @@ function detectContext(mainKeyword, description) {
 
 function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
-  // Merge formats and product types for second word
-  const formatTypes = [...context.mentionedFormats, ...context.productTypes].filter((v, i, arr) => arr.indexOf(v) === i);
+  // Only allow main/related word + format OR main/related word + product type
+  const formats = context.mentionedFormats;
+  const productTypes = context.productTypes;
 
-  // 1. Main keyword + format/product type
+  // 1. Main keyword + format
   context.coreWords.forEach(word => {
-    formatTypes.forEach(type => {
+    formats.forEach(format => {
+      if (word !== format) {
+        keywords.add(`${word} ${format}`);
+      }
+    });
+  });
+
+  // 2. Main keyword + product type
+  context.coreWords.forEach(word => {
+    productTypes.forEach(type => {
       if (word !== type) {
         keywords.add(`${word} ${type}`);
       }
     });
   });
 
-  // 2. Related words + format/product type
+  // 3. Related words + format
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
     related.forEach(relatedWord => {
-      formatTypes.forEach(type => {
+      formats.forEach(format => {
+        if (relatedWord !== format) {
+          keywords.add(`${relatedWord} ${format}`);
+        }
+      });
+    });
+  });
+
+  // 4. Related words + product type
+  context.coreWords.forEach(coreWord => {
+    const related = relatedWordsMap.get(coreWord) || [];
+    related.forEach(relatedWord => {
+      productTypes.forEach(type => {
         if (relatedWord !== type) {
           keywords.add(`${relatedWord} ${type}`);
         }
@@ -236,7 +258,7 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // 3. Style + main keyword (not style + format)
+  // 5. Style + main keyword (not style + format/product type)
   context.mentionedStyles.forEach(style => {
     context.coreWords.forEach(word => {
       if (word !== style) {
@@ -245,10 +267,16 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // 4. Main keyword + holiday/season/occasion + format/product type
-  context.coreWords.forEach(word => {
-    [...KEYWORD_CATEGORIES.holidays, ...KEYWORD_CATEGORIES.seasons, ...KEYWORD_CATEGORIES.occasions].forEach(event => {
-      formatTypes.forEach(type => {
+  // 6. Main/related word + event + format/product type
+  const events = [...KEYWORD_CATEGORIES.holidays, ...KEYWORD_CATEGORIES.seasons, ...KEYWORD_CATEGORIES.occasions];
+  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
+    events.forEach(event => {
+      formats.forEach(format => {
+        if (word !== format && event !== format) {
+          keywords.add(`${word} ${event} ${format}`);
+        }
+      });
+      productTypes.forEach(type => {
         if (word !== type && event !== type) {
           keywords.add(`${word} ${event} ${type}`);
         }
@@ -256,13 +284,14 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // Remove one-word results and any where both words are formats/product types
+  // Remove one-word results and any where both words are format/product type
   return Array.from(keywords).filter(kw => {
     const parts = kw.trim().split(/\s+/);
     if (parts.length < 2) return false;
-    // Only allow format/product type as second/third word, not both
-    if (parts.length === 2 && formatTypes.includes(parts[0]) && formatTypes.includes(parts[1])) return false;
-    if (parts.length === 3 && formatTypes.includes(parts[1]) && formatTypes.includes(parts[2])) return false;
+    // Only allow format or product type as second/third word, not both
+    if (parts.length === 2 && formats.includes(parts[0]) && productTypes.includes(parts[1])) return false;
+    if (parts.length === 2 && productTypes.includes(parts[0]) && formats.includes(parts[1])) return false;
+    if (parts.length === 3 && ((formats.includes(parts[1]) && productTypes.includes(parts[2])) || (productTypes.includes(parts[1]) && formats.includes(parts[2])))) return false;
     return true;
   });
 }
