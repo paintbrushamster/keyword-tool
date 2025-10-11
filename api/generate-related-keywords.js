@@ -37,20 +37,28 @@ const FILLER_WORDS = new Set([
   'on', 'at', 'to', 'from', 'by', 'of', 'or', 'as', 'be', 'is', 'are', 'it'
 ]);
 
-// Fetch related words from DataMuse API
+// Fetch related words from ConceptNet API
 async function fetchRelatedWords(word) {
   try {
-    // Get related words (synonyms, similar meaning, rhymes, etc.)
+    // Query ConceptNet for related words in English
     const response = await fetch(
-      `https://api.datamuse.com/words?ml=${encodeURIComponent(word)}&max=15`
+      `https://api.conceptnet.io/query?node=/c/en/${encodeURIComponent(word)}&other=/c/en&rel=/r/RelatedTo&limit=20`
     );
-    
     if (!response.ok) return [];
-    
     const data = await response.json();
-    return data.map(item => item.word.toLowerCase()).slice(0, 10);
+    // Extract related words from ConceptNet edges
+    const related = data.edges
+      .map(edge => {
+        // Get the end node label
+        const end = edge.end && edge.end.label ? edge.end.label.toLowerCase() : '';
+        // Filter out the original word and short/irrelevant results
+        return end !== word.toLowerCase() && end.length > 2 ? end : null;
+      })
+      .filter(Boolean);
+    // Return up to 10 unique related words
+    return Array.from(new Set(related)).slice(0, 10);
   } catch (error) {
-    console.error('DataMuse API error:', error);
+    console.error('ConceptNet API error:', error);
     return [];
   }
 }
@@ -212,12 +220,11 @@ function detectContext(mainKeyword, description) {
 
 function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
-  // Only allow main/related word + format OR main/related word + product type
   const formats = context.mentionedFormats;
   const productTypes = context.productTypes;
 
-  // 1. Main keyword + format
-  context.coreWords.forEach(word => {
+  // 1. Main/related word + format
+  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     formats.forEach(format => {
       if (word !== format) {
         keywords.add(`${word} ${format}`);
@@ -225,8 +232,8 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // 2. Main keyword + product type
-  context.coreWords.forEach(word => {
+  // 2. Main/related word + product type
+  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     productTypes.forEach(type => {
       if (word !== type) {
         keywords.add(`${word} ${type}`);
@@ -234,40 +241,16 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // 3. Related words + format
-  context.coreWords.forEach(coreWord => {
-    const related = relatedWordsMap.get(coreWord) || [];
-    related.forEach(relatedWord => {
-      formats.forEach(format => {
-        if (relatedWord !== format) {
-          keywords.add(`${relatedWord} ${format}`);
-        }
-      });
-    });
-  });
-
-  // 4. Related words + product type
-  context.coreWords.forEach(coreWord => {
-    const related = relatedWordsMap.get(coreWord) || [];
-    related.forEach(relatedWord => {
-      productTypes.forEach(type => {
-        if (relatedWord !== type) {
-          keywords.add(`${relatedWord} ${type}`);
-        }
-      });
-    });
-  });
-
-  // 5. Style + main keyword (not style + format/product type)
+  // 3. Style + main/related word
   context.mentionedStyles.forEach(style => {
-    context.coreWords.forEach(word => {
+    [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
       if (word !== style) {
         keywords.add(`${style} ${word}`);
       }
     });
   });
 
-  // 6. Main/related word + event + format/product type
+  // 4. Main/related word + event + format
   const events = [...KEYWORD_CATEGORIES.holidays, ...KEYWORD_CATEGORIES.seasons, ...KEYWORD_CATEGORIES.occasions];
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     events.forEach(event => {
@@ -276,6 +259,12 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
           keywords.add(`${word} ${event} ${format}`);
         }
       });
+    });
+  });
+
+  // 5. Main/related word + event + product type
+  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
+    events.forEach(event => {
       productTypes.forEach(type => {
         if (word !== type && event !== type) {
           keywords.add(`${word} ${event} ${type}`);
@@ -284,15 +273,13 @@ function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap)
     });
   });
 
-  // Remove one-word results and any where both words are format/product type
+  // Remove any keyword that contains both a file format and a product type
   return Array.from(keywords).filter(kw => {
     const parts = kw.trim().split(/\s+/);
-    if (parts.length < 2) return false;
-    // Only allow format or product type as second/third word, not both
-    if (parts.length === 2 && formats.includes(parts[0]) && productTypes.includes(parts[1])) return false;
-    if (parts.length === 2 && productTypes.includes(parts[0]) && formats.includes(parts[1])) return false;
-    if (parts.length === 3 && ((formats.includes(parts[1]) && productTypes.includes(parts[2])) || (productTypes.includes(parts[1]) && formats.includes(parts[2])))) return false;
-    return true;
+    const hasFormat = parts.some(p => formats.includes(p));
+    const hasType = parts.some(p => productTypes.includes(p));
+    if (hasFormat && hasType) return false;
+    return parts.length > 1;
   });
 }
 
