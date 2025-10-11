@@ -85,74 +85,87 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Main keyword is required' });
   }
 
+  const debug = { steps: [] };
+
   try {
-    const allKeywords = new Map();
-    const debug = { steps: [] };
-    
-    const context = detectContext(mainKeyword, description || '');
-    debug.steps.push(`Main words: ${context.coreWords.join(', ')}`);
-    debug.steps.push(`Formats: ${context.mentionedFormats.join(', ')}`);
-    
+    let context;
+    try {
+      context = detectContext(mainKeyword, description || '');
+      debug.steps.push(`Context: ${JSON.stringify(context)}`);
+    } catch (ctxError) {
+      debug.steps.push(`Context detection failed: ${ctxError && ctxError.stack ? ctxError.stack : ctxError}`);
+      throw ctxError;
+    }
+
     // Fetch related words for each core word
     const relatedWordsMap = new Map();
-    for (const word of context.coreWords.slice(0, 2)) {
-      const related = await fetchRelatedWords(word);
-      if (related.length > 0) {
-        relatedWordsMap.set(word, related);
-        debug.steps.push(`Related to "${word}": ${related.slice(0, 5).join(', ')}`);
+    try {
+      for (const word of context.coreWords.slice(0, 2)) {
+        const related = await fetchRelatedWords(word);
+        debug.steps.push(`Related to "${word}": ${JSON.stringify(related)}`);
+        if (related.length > 0) {
+          relatedWordsMap.set(word, related);
+        }
       }
+    } catch (relError) {
+      debug.steps.push(`Related word fetch failed: ${relError && relError.stack ? relError.stack : relError}`);
+      throw relError;
     }
-    
-    // Base keywords (with main keyword priority)
-    const baseKeywords = extractBaseKeywords(mainKeyword, description || '', context, relatedWordsMap);
-    debug.steps.push(`Base keywords: ${baseKeywords.length}`);
-    
+
+    let baseKeywords;
+    try {
+      baseKeywords = extractBaseKeywords(mainKeyword, description || '', context, relatedWordsMap);
+      debug.steps.push(`Base keywords: ${baseKeywords.length}`);
+    } catch (baseError) {
+      debug.steps.push(`Base keyword generation failed: ${baseError && baseError.stack ? baseError.stack : baseError}`);
+      throw baseError;
+    }
+
+    const allKeywords = new Map();
     baseKeywords.forEach((kw, index) => {
       if (isValidKeyword(kw, allKeywords)) {
         allKeywords.set(kw, 100 - index + randomVariance(5));
       }
     });
-    
-    // Digital variations (main keyword priority)
-    addDigitalVariations(allKeywords, context, relatedWordsMap);
-    debug.steps.push(`After digital: ${allKeywords.size}`);
-    
-    // Events (holidays/seasons)
-    addEventKeywords(allKeywords, context, relatedWordsMap);
-    debug.steps.push(`After events: ${allKeywords.size}`);
-    
-    // Usage keywords
-    if (context.mentionedUsage.length > 0) {
-      addUsageKeywords(allKeywords, context);
-      debug.steps.push(`After usage: ${allKeywords.size}`);
+
+    try {
+      addDigitalVariations(allKeywords, context, relatedWordsMap);
+      debug.steps.push(`After digital: ${allKeywords.size}`);
+      addEventKeywords(allKeywords, context, relatedWordsMap);
+      debug.steps.push(`After events: ${allKeywords.size}`);
+      if (context.mentionedUsage.length > 0) {
+        addUsageKeywords(allKeywords, context);
+        debug.steps.push(`After usage: ${allKeywords.size}`);
+      }
+      addSmartCombinations(allKeywords, context, relatedWordsMap);
+      debug.steps.push(`After combinations: ${allKeywords.size}`);
+    } catch (genError) {
+      debug.steps.push(`Keyword generation failed: ${genError && genError.stack ? genError.stack : genError}`);
+      throw genError;
     }
-    
-    // Smart combinations
-    addSmartCombinations(allKeywords, context, relatedWordsMap);
-    debug.steps.push(`After combinations: ${allKeywords.size}`);
-    
-    // Sort and deduplicate
+
     let keywords = Array.from(allKeywords.entries())
       .filter(([keyword]) => isValidKeyword(keyword, new Map()))
       .sort((a, b) => b[1] - a[1])
       .map(([keyword]) => keyword)
       .slice(0, 50);
 
-    // Final deduplication and filter: no keyword can contain both a file format and a product type
     const keywordTypes = KEYWORD_CATEGORIES.keywordTypes;
     const finalKeywords = keywords.filter(kw => {
       const parts = kw.trim().split(/\s+/);
       const typeCount = parts.filter(p => keywordTypes.includes(p)).length;
-      return typeCount <= 1;
+      return typeCount === 1;
     });
-    debug.steps.push(`Final (after dedup and format/type filter): ${finalKeywords.length}`);
-    
+    debug.steps.push(`Final (after dedup and type filter): ${finalKeywords.length}`);
+
     return res.status(200).json({ keywords: finalKeywords, debug });
   } catch (error) {
+    debug.steps.push(`Error: ${error && error.stack ? error.stack : error}`);
     console.error('Error:', error);
     return res.status(500).json({ 
       error: 'Failed to generate keywords',
-      details: error && error.stack ? error.stack : (error && error.message ? error.message : String(error))
+      details: error && error.stack ? error.stack : (error && error.message ? error.message : String(error)),
+      debug
     });
   }
 }
