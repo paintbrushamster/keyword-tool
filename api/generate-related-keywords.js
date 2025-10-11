@@ -34,22 +34,30 @@ const FILLER_WORDS = new Set([
 // Fetch related words from ConceptNet API
 async function fetchRelatedWords(word) {
   try {
-    // Query ConceptNet for related words in English
     const response = await fetch(
       `https://api.conceptnet.io/query?node=/c/en/${encodeURIComponent(word)}&other=/c/en&rel=/r/RelatedTo&limit=20`
     );
-    if (!response.ok) return [];
-    const data = await response.json();
-    // Extract related words from ConceptNet edges
+    if (!response.ok) {
+      console.error('ConceptNet API response not ok:', response.status, response.statusText);
+      return [];
+    }
+    let data;
+    try {
+      data = await response.json();
+    } catch (jsonError) {
+      console.error('ConceptNet API invalid JSON:', jsonError);
+      return [];
+    }
+    if (!data.edges || !Array.isArray(data.edges)) {
+      console.error('ConceptNet API missing edges:', data);
+      return [];
+    }
     const related = data.edges
       .map(edge => {
-        // Get the end node label
         const end = edge.end && edge.end.label ? edge.end.label.toLowerCase() : '';
-        // Filter out the original word and short/irrelevant results
         return end !== word.toLowerCase() && end.length > 2 ? end : null;
       })
       .filter(Boolean);
-    // Return up to 10 unique related words
     return Array.from(new Set(related)).slice(0, 10);
   } catch (error) {
     console.error('ConceptNet API error:', error);
@@ -144,7 +152,7 @@ export default async function handler(req, res) {
     console.error('Error:', error);
     return res.status(500).json({ 
       error: 'Failed to generate keywords',
-      details: error.message 
+      details: error && error.stack ? error.stack : (error && error.message ? error.message : String(error))
     });
   }
 }
