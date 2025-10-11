@@ -4,8 +4,8 @@
 
 const KEYWORD_CATEGORIES = {
   fileFormats: [
-    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'ai', 'psd', 'dxf', 
-    'studio', 'studio3', 'fcm'
+    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf', 
+    'studio', 'studio3', 'fcm' // 'ai' removed
   ],
   digitalProducts: [
     'digital download', 'instant download', 'printable', 'digital file',
@@ -15,7 +15,7 @@ const KEYWORD_CATEGORIES = {
   ],
   productTypes: [
     'clipart', 'graphic', 'design', 'illustration', 'image',
-    'template', 'mockup', 'pattern'
+    'template', 'mockup' // Only add 'mockup' if specified
   ],
   craftStyles: [
     'watercolor', 'hand drawn', 'hand painted', 'vintage', 'retro',
@@ -159,20 +159,28 @@ function shuffleArray(array) {
 
 function detectContext(mainKeyword, description) {
   const fullText = `${mainKeyword} ${description}`.toLowerCase();
-  
-  const mentionedFormats = KEYWORD_CATEGORIES.fileFormats.filter(f => 
+
+  // Prioritize file formats mentioned in description or mainKeyword
+  const allFileFormats = KEYWORD_CATEGORIES.fileFormats.filter(f =>
     fullText.includes(f)
   );
-  
+  // If none mentioned, use default top 3
+  const mentionedFormats = allFileFormats.length ? allFileFormats : KEYWORD_CATEGORIES.fileFormats.slice(0, 3);
+
+  // Only include 'mockup' and 'pattern' if specified
+  const productTypes = KEYWORD_CATEGORIES.productTypes.filter(type =>
+    type !== 'mockup' && type !== 'pattern' || fullText.includes(type)
+  );
+
   const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s =>
     fullText.includes(s)
   );
-  
+
   const mentionedUsage = KEYWORD_CATEGORIES.usage.filter(u =>
     fullText.includes(u)
   );
-  
-  const hasDigitalKeywords = 
+
+  const hasDigitalKeywords =
     mentionedFormats.length > 0 ||
     fullText.includes('digital') ||
     fullText.includes('download') ||
@@ -180,35 +188,25 @@ function detectContext(mainKeyword, description) {
     fullText.includes('silhouette') ||
     fullText.includes('clipart') ||
     fullText.includes('graphic');
-  
-  // Extract CORE words from main keyword (these are priority)
-  const coreWords = mainKeyword.toLowerCase()
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !FILLER_WORDS.has(w));
-  
-  // Extract additional words from description (secondary)
-  const descWords = description.toLowerCase()
-    .split(/[\s,\.!?;]+/)
-    .map(w => w.trim())
-    .filter(w => 
-      w.length > 3 && 
-      !FILLER_WORDS.has(w) &&
-      !KEYWORD_CATEGORIES.fileFormats.includes(w) &&
-      !coreWords.includes(w)
-    )
-    .slice(0, 3);
-  
-  // If no formats mentioned, use defaults (but prioritize mentioned ones)
-  const formats = mentionedFormats.length ? mentionedFormats : KEYWORD_CATEGORIES.fileFormats.slice(0, 3);
-  const styles = mentionedStyles.length ? mentionedStyles : [];
-  
+
+  // Extract core words from main keyword and description, prioritizing file formats and styles
+  let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w));
+  let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w =>
+    w.length > 2 && !FILLER_WORDS.has(w) && !mentionedFormats.includes(w) && !coreWords.includes(w)
+  );
+  // Add prioritized file formats and styles from description
+  descWords = [...new Set([...descWords, ...mentionedFormats, ...mentionedStyles])];
+  // Remove duplicates
+  coreWords = [...new Set(coreWords.concat(descWords))];
+
   return {
     isDigital: hasDigitalKeywords,
-    coreWords, // Main keyword words - HIGHEST PRIORITY
-    descWords, // Secondary words from description
-    mentionedFormats: formats,
-    mentionedStyles: styles,
+    coreWords,
+    descWords,
+    mentionedFormats,
+    mentionedStyles,
     mentionedUsage,
+    productTypes,
     hasBundle: fullText.includes('bundle') || fullText.includes('set'),
     hasCollection: fullText.includes('collection') || fullText.includes('pack')
   };
@@ -216,52 +214,59 @@ function detectContext(mainKeyword, description) {
 
 function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
-  
-  // 1. Main keyword itself
-  keywords.add(mainKeyword.toLowerCase().trim());
-  
-  // 2. Core word combinations (PRIORITY)
-  context.coreWords.forEach((word, i) => {
-    // Each core word standalone
-    keywords.add(word);
-    
-    // Core word pairs
-    if (i < context.coreWords.length - 1) {
-      keywords.add(`${word} ${context.coreWords[i + 1]}`);
-    }
-    
-    // Core word with formats
-    context.mentionedFormats.slice(0, 3).forEach(format => {
-      keywords.add(`${word} ${format}`);
+
+  // Always list prioritized file formats first
+  context.mentionedFormats.forEach(format => {
+    context.coreWords.forEach(word => {
+      if (word !== format) {
+        keywords.add(`${word} ${format}`);
+      }
     });
   });
-  
-  // 3. Related words with core words (using DataMuse)
+
+  // Add style and clipart combinations
+  context.coreWords.forEach(word => {
+    if (context.mentionedStyles.includes('watercolor')) {
+      keywords.add(`watercolor ${word}`);
+    }
+    if (context.productTypes.includes('clipart')) {
+      keywords.add(`${word} clipart`);
+    }
+  });
+
+  // Add related words for main keyword
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
-    related.slice(0, 5).forEach(relatedWord => {
-      // Related word + other core words
-      context.coreWords.forEach(otherCore => {
-        if (otherCore !== coreWord) {
-          keywords.add(`${relatedWord} ${otherCore}`);
+    related.forEach(relatedWord => {
+      context.mentionedFormats.forEach(format => {
+        if (relatedWord !== format) {
+          keywords.add(`${relatedWord} ${format}`);
         }
       });
-      
-      // Related word + formats
-      context.mentionedFormats.slice(0, 2).forEach(format => {
-        keywords.add(`${relatedWord} ${format}`);
+    });
+  });
+
+  // Add combinations with holidays, seasons, occasions
+  context.coreWords.forEach(coreWord => {
+    KEYWORD_CATEGORIES.holidays.forEach(holiday => {
+      context.mentionedFormats.forEach(format => {
+        keywords.add(`${coreWord} ${holiday} ${format}`);
+      });
+    });
+    KEYWORD_CATEGORIES.seasons.forEach(season => {
+      context.mentionedFormats.forEach(format => {
+        keywords.add(`${coreWord} ${season} ${format}`);
+      });
+    });
+    KEYWORD_CATEGORIES.occasions.forEach(occasion => {
+      context.mentionedFormats.forEach(format => {
+        keywords.add(`${coreWord} ${occasion} ${format}`);
       });
     });
   });
-  
-  // 4. Styles with core words
-  context.mentionedStyles.forEach(style => {
-    context.coreWords.forEach(word => {
-      keywords.add(`${style} ${word}`);
-    });
-  });
-  
-  return Array.from(keywords);
+
+  // Remove one-word results
+  return Array.from(keywords).filter(kw => kw.trim().split(/\s+/).length > 1);
 }
 
 function addDigitalVariations(allKeywords, context, relatedWordsMap) {
@@ -403,24 +408,17 @@ function addSmartCombinations(allKeywords, context, relatedWordsMap) {
 
 function isValidKeyword(keyword, existingKeywords) {
   const words = keyword.trim().toLowerCase().split(/\s+/);
-  
-  if (words.length < 1) return false;
+  if (words.length < 2) return false; // No one-word results
   if (words.length > 4) return false;
   if (keyword.length > 80) return false;
-  
+  if (words.includes('ai')) return false; // Exclude 'ai'
   // Check for duplicate words in the keyword
   const wordSet = new Set(words);
-  if (wordSet.size !== words.length) return false; // Has duplicate words
-  
-  // Check if already exists
+  if (wordSet.size !== words.length) return false;
   if (existingKeywords.has(keyword.toLowerCase())) return false;
-  
-  // Check for duplicate formats
   if (hasDuplicateFormats(keyword)) return false;
-  
   const nonFillerWords = words.filter(w => !FILLER_WORDS.has(w));
   if (nonFillerWords.length === 0) return false;
-  
   return true;
 }
 
