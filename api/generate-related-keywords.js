@@ -3,11 +3,17 @@
 // ============================================
 
 const KEYWORD_CATEGORIES = {
-  keywordTypes: [
-    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf',
-    'clipart', 'graphic', 'design', 'illustration', 'template', 'mockup',
-    'cricut', 'silhouette', 'sublimation', 'cricut design', 'silhouette cameo', 'cut file', 'cutting file', 'cricut file',
-    'digital download', 'instant download', 'printable', 'digital file', 'heat transfer', 'vinyl decal'
+  fileFormats: [
+    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf' // 'ai' and 'image' removed
+  ],
+  digitalProducts: [
+    'digital download', 'instant download', 'printable', 'digital file',
+    'cricut', 'silhouette', 'sublimation',
+    'cricut design', 'silhouette cameo', 'cut file', 'cutting file',
+    'cricut file'
+  ],
+  productTypes: [
+    'clipart', 'graphic', 'design', 'illustration', 'template', 'mockup' // 'image' removed, only add 'mockup' if specified
   ],
   craftStyles: [
     'watercolor', 'hand drawn', 'hand painted', 'vintage', 'retro',
@@ -34,30 +40,22 @@ const FILLER_WORDS = new Set([
 // Fetch related words from ConceptNet API
 async function fetchRelatedWords(word) {
   try {
+    // Query ConceptNet for related words in English
     const response = await fetch(
       `https://api.conceptnet.io/query?node=/c/en/${encodeURIComponent(word)}&other=/c/en&rel=/r/RelatedTo&limit=20`
     );
-    if (!response.ok) {
-      console.error('ConceptNet API response not ok:', response.status, response.statusText);
-      return [];
-    }
-    let data;
-    try {
-      data = await response.json();
-    } catch (jsonError) {
-      console.error('ConceptNet API invalid JSON:', jsonError);
-      return [];
-    }
-    if (!data.edges || !Array.isArray(data.edges)) {
-      console.error('ConceptNet API missing edges:', data);
-      return [];
-    }
+    if (!response.ok) return [];
+    const data = await response.json();
+    // Extract related words from ConceptNet edges
     const related = data.edges
       .map(edge => {
+        // Get the end node label
         const end = edge.end && edge.end.label ? edge.end.label.toLowerCase() : '';
+        // Filter out the original word and short/irrelevant results
         return end !== word.toLowerCase() && end.length > 2 ? end : null;
       })
       .filter(Boolean);
+    // Return up to 10 unique related words
     return Array.from(new Set(related)).slice(0, 10);
   } catch (error) {
     console.error('ConceptNet API error:', error);
@@ -85,87 +83,76 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Main keyword is required' });
   }
 
-  const debug = { steps: [] };
-
   try {
-    let context;
-    try {
-      context = detectContext(mainKeyword, description || '');
-      debug.steps.push(`Context: ${JSON.stringify(context)}`);
-    } catch (ctxError) {
-      debug.steps.push(`Context detection failed: ${ctxError && ctxError.stack ? ctxError.stack : ctxError}`);
-      throw ctxError;
-    }
-
+    const allKeywords = new Map();
+    const debug = { steps: [] };
+    
+    const context = detectContext(mainKeyword, description || '');
+    debug.steps.push(`Main words: ${context.coreWords.join(', ')}`);
+    debug.steps.push(`Formats: ${context.mentionedFormats.join(', ')}`);
+    
     // Fetch related words for each core word
     const relatedWordsMap = new Map();
-    try {
-      for (const word of context.coreWords.slice(0, 2)) {
-        const related = await fetchRelatedWords(word);
-        debug.steps.push(`Related to "${word}": ${JSON.stringify(related)}`);
-        if (related.length > 0) {
-          relatedWordsMap.set(word, related);
-        }
+    for (const word of context.coreWords.slice(0, 2)) {
+      const related = await fetchRelatedWords(word);
+      if (related.length > 0) {
+        relatedWordsMap.set(word, related);
+        debug.steps.push(`Related to "${word}": ${related.slice(0, 5).join(', ')}`);
       }
-    } catch (relError) {
-      debug.steps.push(`Related word fetch failed: ${relError && relError.stack ? relError.stack : relError}`);
-      throw relError;
     }
-
-    let baseKeywords;
-    try {
-      baseKeywords = extractBaseKeywords(mainKeyword, description || '', context, relatedWordsMap);
-      debug.steps.push(`Base keywords: ${baseKeywords.length}`);
-    } catch (baseError) {
-      debug.steps.push(`Base keyword generation failed: ${baseError && baseError.stack ? baseError.stack : baseError}`);
-      throw baseError;
-    }
-
-    const allKeywords = new Map();
+    
+    // Base keywords (with main keyword priority)
+    const baseKeywords = extractBaseKeywords(mainKeyword, description || '', context, relatedWordsMap);
+    debug.steps.push(`Base keywords: ${baseKeywords.length}`);
+    
     baseKeywords.forEach((kw, index) => {
       if (isValidKeyword(kw, allKeywords)) {
         allKeywords.set(kw, 100 - index + randomVariance(5));
       }
     });
-
-    try {
-      addDigitalVariations(allKeywords, context, relatedWordsMap);
-      debug.steps.push(`After digital: ${allKeywords.size}`);
-      addEventKeywords(allKeywords, context, relatedWordsMap);
-      debug.steps.push(`After events: ${allKeywords.size}`);
-      if (context.mentionedUsage.length > 0) {
-        addUsageKeywords(allKeywords, context);
-        debug.steps.push(`After usage: ${allKeywords.size}`);
-      }
-      addSmartCombinations(allKeywords, context, relatedWordsMap);
-      debug.steps.push(`After combinations: ${allKeywords.size}`);
-    } catch (genError) {
-      debug.steps.push(`Keyword generation failed: ${genError && genError.stack ? genError.stack : genError}`);
-      throw genError;
+    
+    // Digital variations (main keyword priority)
+    addDigitalVariations(allKeywords, context, relatedWordsMap);
+    debug.steps.push(`After digital: ${allKeywords.size}`);
+    
+    // Events (holidays/seasons)
+    addEventKeywords(allKeywords, context, relatedWordsMap);
+    debug.steps.push(`After events: ${allKeywords.size}`);
+    
+    // Usage keywords
+    if (context.mentionedUsage.length > 0) {
+      addUsageKeywords(allKeywords, context);
+      debug.steps.push(`After usage: ${allKeywords.size}`);
     }
-
+    
+    // Smart combinations
+    addSmartCombinations(allKeywords, context, relatedWordsMap);
+    debug.steps.push(`After combinations: ${allKeywords.size}`);
+    
+    // Sort and deduplicate
     let keywords = Array.from(allKeywords.entries())
       .filter(([keyword]) => isValidKeyword(keyword, new Map()))
       .sort((a, b) => b[1] - a[1])
       .map(([keyword]) => keyword)
       .slice(0, 50);
 
-    const keywordTypes = KEYWORD_CATEGORIES.keywordTypes;
+    // Final deduplication and filter: no keyword can contain both a file format and a product type
+    const formats = KEYWORD_CATEGORIES.fileFormats;
+    const productTypes = KEYWORD_CATEGORIES.productTypes;
     const finalKeywords = keywords.filter(kw => {
       const parts = kw.trim().split(/\s+/);
-      const typeCount = parts.filter(p => keywordTypes.includes(p)).length;
-      return typeCount === 1;
+      const hasFormat = parts.some(p => formats.includes(p));
+      const hasType = parts.some(p => productTypes.includes(p));
+      return !(hasFormat && hasType);
     });
-    debug.steps.push(`Final (after dedup and type filter): ${finalKeywords.length}`);
-
+    debug.steps.push(`Final (after dedup and format/type filter): ${finalKeywords.length}`);
+    
     return res.status(200).json({ keywords: finalKeywords, debug });
   } catch (error) {
-    debug.steps.push(`Error: ${error && error.stack ? error.stack : error}`);
     console.error('Error:', error);
     return res.status(500).json({ 
       error: 'Failed to generate keywords',
-      details: error && error.stack ? error.stack : (error && error.message ? error.message : String(error)),
-      debug
+      details: error.message 
     });
   }
 }
@@ -186,32 +173,53 @@ function shuffleArray(array) {
 function detectContext(mainKeyword, description) {
   const fullText = `${mainKeyword} ${description}`.toLowerCase();
 
-  // Find all keywordTypes mentioned
-  const mentionedKeywordTypes = KEYWORD_CATEGORIES.keywordTypes.filter(type => fullText.includes(type));
+  // Prioritize file formats mentioned in description or mainKeyword
+  const allFileFormats = KEYWORD_CATEGORIES.fileFormats.filter(f =>
+    fullText.includes(f)
+  );
   // If none mentioned, use default top 3
-  const prioritizedKeywordTypes = mentionedKeywordTypes.length ? mentionedKeywordTypes : KEYWORD_CATEGORIES.keywordTypes.slice(0, 3);
+  const mentionedFormats = allFileFormats.length ? allFileFormats : KEYWORD_CATEGORIES.fileFormats.slice(0, 3);
 
-  const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s => fullText.includes(s));
-  const mentionedUsage = KEYWORD_CATEGORIES.usage.filter(u => fullText.includes(u));
+  // Only include 'mockup' and 'pattern' if specified
+  const productTypes = KEYWORD_CATEGORIES.productTypes.filter(type =>
+    type !== 'mockup' && type !== 'pattern' || fullText.includes(type)
+  );
 
-  // Extract core words from main keyword and description, EXCLUDING any keywordTypes
-  let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w) && !KEYWORD_CATEGORIES.keywordTypes.includes(w));
-  let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w => w.length > 2 && !FILLER_WORDS.has(w) && !KEYWORD_CATEGORIES.keywordTypes.includes(w) && !coreWords.includes(w));
-  descWords = [...new Set([...descWords, ...mentionedStyles])];
+  const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s =>
+    fullText.includes(s)
+  );
+
+  const mentionedUsage = KEYWORD_CATEGORIES.usage.filter(u =>
+    fullText.includes(u)
+  );
+
+  const hasDigitalKeywords =
+    mentionedFormats.length > 0 ||
+    fullText.includes('digital') ||
+    fullText.includes('download') ||
+    fullText.includes('cricut') ||
+    fullText.includes('silhouette') ||
+    fullText.includes('clipart') ||
+    fullText.includes('graphic');
+
+  // Extract core words from main keyword and description, prioritizing file formats and styles
+  let coreWords = mainKeyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !FILLER_WORDS.has(w));
+  let descWords = description.toLowerCase().split(/[\s,\.!?;]+/).map(w => w.trim()).filter(w =>
+    w.length > 2 && !FILLER_WORDS.has(w) && !mentionedFormats.includes(w) && !coreWords.includes(w)
+  );
+  // Add prioritized file formats and styles from description
+  descWords = [...new Set([...descWords, ...mentionedFormats, ...mentionedStyles])];
+  // Remove duplicates
   coreWords = [...new Set(coreWords.concat(descWords))];
 
-  // Fallback if no coreWords
-  if (coreWords.length === 0) {
-    // Use a generic fallback word or the user's input minus keywordTypes
-    const fallback = mainKeyword.toLowerCase().split(/\s+/).filter(w => !KEYWORD_CATEGORIES.keywordTypes.includes(w) && !FILLER_WORDS.has(w));
-    coreWords = fallback.length ? fallback : ['design', 'art', 'craft'];
-  }
-
   return {
+    isDigital: hasDigitalKeywords,
     coreWords,
-    mentionedKeywordTypes: prioritizedKeywordTypes,
+    descWords,
+    mentionedFormats,
     mentionedStyles,
     mentionedUsage,
+    productTypes,
     hasBundle: fullText.includes('bundle') || fullText.includes('set'),
     hasCollection: fullText.includes('collection') || fullText.includes('pack')
   };
@@ -219,69 +227,92 @@ function detectContext(mainKeyword, description) {
 
 function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
-  const keywordTypes = KEYWORD_CATEGORIES.keywordTypes;
+  const formats = context.mentionedFormats;
+  const productTypes = context.productTypes;
 
-  // 1. Main/related word + keywordType
+  // 1. Main/related word + format
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-    keywordTypes.forEach(type => {
-      keywords.add(`${word} ${type}`);
+    formats.forEach(format => {
+      if (word !== format) {
+        keywords.add(`${word} ${format}`);
+      }
     });
   });
 
-  // 2. Style + main/related word
+  // 2. Main/related word + product type
+  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
+    productTypes.forEach(type => {
+      if (word !== type) {
+        keywords.add(`${word} ${type}`);
+      }
+    });
+  });
+
+  // 3. Style + main/related word
   context.mentionedStyles.forEach(style => {
     [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-      keywords.add(`${style} ${word}`);
+      if (word !== style) {
+        keywords.add(`${style} ${word}`);
+      }
     });
   });
 
-  // 3. Main/related word + event + keywordType
+  // 4. Main/related word + event + format
   const events = [...KEYWORD_CATEGORIES.holidays, ...KEYWORD_CATEGORIES.seasons, ...KEYWORD_CATEGORIES.occasions];
   [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
     events.forEach(event => {
-      keywordTypes.forEach(type => {
-        keywords.add(`${word} ${event} ${type}`);
+      formats.forEach(format => {
+        if (word !== format && event !== format) {
+          keywords.add(`${word} ${event} ${format}`);
+        }
       });
     });
   });
 
-  // Remove any keyword that contains more than one keywordType word
-  let result = Array.from(keywords).filter(kw => {
+  // 5. Main/related word + event + product type
+  [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
+    events.forEach(event => {
+      productTypes.forEach(type => {
+        if (word !== type && event !== type) {
+          keywords.add(`${word} ${event} ${type}`);
+        }
+      });
+    });
+  });
+
+  // Remove any keyword that contains both a file format and a product type
+  return Array.from(keywords).filter(kw => {
     const parts = kw.trim().split(/\s+/);
-    const typeCount = parts.filter(p => keywordTypes.includes(p)).length;
-    return typeCount === 1 && parts.length > 1;
+    const hasFormat = parts.some(p => formats.includes(p));
+    const hasType = parts.some(p => productTypes.includes(p));
+    if (hasFormat && hasType) return false;
+    return parts.length > 1;
   });
-
-  // If less than 50, add more event/style combos
-  if (result.length < 50) {
-    const extras = [];
-    [...context.coreWords, ...context.coreWords.flatMap(coreWord => relatedWordsMap.get(coreWord) || [])].forEach(word => {
-      events.forEach(event => {
-        context.mentionedStyles.forEach(style => {
-          extras.push(`${style} ${word} ${event}`);
-        });
-      });
-    });
-    result = [...result, ...extras].slice(0, 50);
-  }
-  return result.slice(0, 50);
 }
 
 function addDigitalVariations(allKeywords, context, relatedWordsMap) {
   // PRIORITY: Core words must appear
   context.coreWords.forEach(coreWord => {
-    // Core word + all keywordTypes
-    context.mentionedKeywordTypes.forEach(type => {
-      const keyword = `${coreWord} ${type}`;
+    // Core word + all formats
+    context.mentionedFormats.forEach(format => {
+      const keyword = `${coreWord} ${format}`;
       if (!allKeywords.has(keyword)) {
         allKeywords.set(keyword, 90 + randomVariance(5));
+      }
+    });
+    
+    // Core word + product types
+    KEYWORD_CATEGORIES.productTypes.forEach(type => {
+      const keyword = `${coreWord} ${type}`;
+      if (!allKeywords.has(keyword)) {
+        allKeywords.set(keyword, 85 + randomVariance(5));
       }
     });
     
     // Core word + digital products
     KEYWORD_CATEGORIES.digitalProducts.slice(0, 6).forEach(product => {
       const keyword = `${coreWord} ${product}`;
-      if (!allKeywords.has(keyword)) {
+      if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
         allKeywords.set(keyword, 80 + randomVariance(5));
       }
     });
@@ -291,8 +322,8 @@ function addDigitalVariations(allKeywords, context, relatedWordsMap) {
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
     related.slice(0, 3).forEach(relatedWord => {
-      context.mentionedKeywordTypes.slice(0, 2).forEach(type => {
-        const keyword = `${relatedWord} ${type}`;
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        const keyword = `${relatedWord} ${format}`;
         if (!allKeywords.has(keyword)) {
           allKeywords.set(keyword, 75 + randomVariance(5));
         }
@@ -359,12 +390,22 @@ function addUsageKeywords(allKeywords, context) {
 function addSmartCombinations(allKeywords, context, relatedWordsMap) {
   // 3-word combinations with CORE words
   context.coreWords.forEach(coreWord => {
-    // Style + core + keywordType
+    // Style + core + format
     context.mentionedStyles.slice(0, 2).forEach(style => {
-      context.mentionedKeywordTypes.slice(0, 3).forEach(type => {
-        const keyword = `${style} ${coreWord} ${type}`;
-        if (!allKeywords.has(keyword)) {
+      context.mentionedFormats.slice(0, 3).forEach(format => {
+        const keyword = `${style} ${coreWord} ${format}`;
+        if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
           allKeywords.set(keyword, 72 + randomVariance(5));
+        }
+      });
+    });
+    
+    // Core + type + format
+    KEYWORD_CATEGORIES.productTypes.slice(0, 3).forEach(type => {
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        const keyword = `${coreWord} ${type} ${format}`;
+        if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
+          allKeywords.set(keyword, 70 + randomVariance(5));
         }
       });
     });
@@ -374,10 +415,10 @@ function addSmartCombinations(allKeywords, context, relatedWordsMap) {
   context.coreWords.forEach(coreWord => {
     const related = relatedWordsMap.get(coreWord) || [];
     related.slice(0, 2).forEach(relatedWord => {
-      context.mentionedKeywordTypes.slice(0, 2).forEach(type => {
-        context.mentionedStyles.slice(0, 2).forEach(style => {
-          const keyword = `${relatedWord} ${style} ${type}`;
-          if (!allKeywords.has(keyword)) {
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        KEYWORD_CATEGORIES.productTypes.slice(0, 2).forEach(type => {
+          const keyword = `${relatedWord} ${type} ${format}`;
+          if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
             allKeywords.set(keyword, 68 + randomVariance(5));
           }
         });
@@ -388,17 +429,22 @@ function addSmartCombinations(allKeywords, context, relatedWordsMap) {
 
 function isValidKeyword(keyword, existingKeywords) {
   const words = keyword.trim().toLowerCase().split(/\s+/);
-  if (words.length < 2) return false;
+  if (words.length < 2) return false; // No one-word results
   if (words.length > 4) return false;
   if (keyword.length > 80) return false;
-  if (words.includes('ai')) return false;
+  if (words.includes('ai')) return false; // Exclude 'ai'
+  // Check for duplicate words in the keyword
   const wordSet = new Set(words);
   if (wordSet.size !== words.length) return false;
   if (existingKeywords.has(keyword.toLowerCase())) return false;
+  if (hasDuplicateFormats(keyword)) return false;
   const nonFillerWords = words.filter(w => !FILLER_WORDS.has(w));
   if (nonFillerWords.length === 0) return false;
-  // Only one keywordType per keyword
-  const typeCount = words.filter(w => KEYWORD_CATEGORIES.keywordTypes.includes(w)).length;
-  if (typeCount !== 1) return false;
   return true;
+}
+
+function hasDuplicateFormats(keyword) {
+  const words = keyword.toLowerCase().split(/\s+/);
+  const formats = words.filter(w => KEYWORD_CATEGORIES.fileFormats.includes(w));
+  return formats.length > 1;
 }
