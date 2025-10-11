@@ -1,7 +1,7 @@
-import natural from 'natural';
-import compromise from 'compromise';
+// ============================================
+// KEYWORD GENERATOR WITH DATAMUSE API
+// ============================================
 
-// Keyword categories
 const KEYWORD_CATEGORIES = {
   fileFormats: [
     'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'ai', 'psd', 'dxf', 
@@ -11,21 +11,15 @@ const KEYWORD_CATEGORIES = {
     'digital download', 'instant download', 'printable', 'digital file',
     'cricut', 'silhouette', 'sublimation', 'print on demand',
     'cricut design', 'silhouette cameo', 'cut file', 'cutting file',
-    'heat transfer', 'vinyl decal'
+    'heat transfer', 'vinyl decal', 'cricut file', 'silhouette file'
   ],
   productTypes: [
     'clipart', 'graphic', 'design', 'illustration', 'image',
-    'bundle', 'set', 'collection', 'pack', 'kit',
-    'template', 'mockup', 'pattern', 'texture'
+    'template', 'mockup', 'pattern'
   ],
   craftStyles: [
     'watercolor', 'hand drawn', 'hand painted', 'vintage', 'retro',
-    'modern', 'minimalist', 'boho', 'rustic'
-  ],
-  physicalProductTypes: [
-    'necklace', 'bracelet', 'earrings', 'ring', 'jewelry',
-    'pendant', 'charm', 'bead', 'stone', 'crystal', 'gemstone',
-    'handmade', 'natural', 'healing', 'spiritual'
+    'modern', 'minimalist', 'boho', 'rustic', 'floral', 'botanical'
   ],
   holidays: [
     'christmas', 'halloween', 'thanksgiving', 'easter', 'valentines day',
@@ -37,19 +31,34 @@ const KEYWORD_CATEGORIES = {
     'wedding', 'birthday', 'baby shower', 'bridal shower',
     'graduation', 'anniversary', 'engagement', 'party', 'gift'
   ],
-  qualities: [
-    'handmade', 'natural', 'authentic', 'genuine', 'premium',
-    'high quality', 'unique', 'custom', 'personalized'
-  ]
+  usage: ['commercial use'] // Only the full phrase
 };
 
 const FILLER_WORDS = new Set([
   'available', 'use', 'with', 'and', 'the', 'a', 'an', 'for', 'in',
-  'on', 'at', 'to', 'from', 'by', 'of', 'or', 'as', 'be', 'is', 'are'
+  'on', 'at', 'to', 'from', 'by', 'of', 'or', 'as', 'be', 'is', 'are', 'it'
 ]);
 
+// Fetch related words from DataMuse API
+async function fetchRelatedWords(word) {
+  try {
+    // Get related words (synonyms, similar meaning, rhymes, etc.)
+    const response = await fetch(
+      `https://api.datamuse.com/words?ml=${encodeURIComponent(word)}&max=15`
+    );
+    
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    return data.map(item => item.word.toLowerCase()).slice(0, 10);
+  } catch (error) {
+    console.error('DataMuse API error:', error);
+    return [];
+  }
+}
+
+// Main handler
 export default async function handler(req, res) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -70,59 +79,97 @@ export default async function handler(req, res) {
 
   try {
     const allKeywords = new Map();
+    const debug = { steps: [] };
     
-    // Step 1: Detect context
     const context = detectContext(mainKeyword, description || '');
+    debug.steps.push(`Main words: ${context.coreWords.join(', ')}`);
+    debug.steps.push(`Formats: ${context.mentionedFormats.join(', ')}`);
     
-    // Step 2: Extract base keywords using NLP
-    const baseKeywords = extractBaseKeywords(mainKeyword, description || '', context);
+    // Fetch related words for each core word
+    const relatedWordsMap = new Map();
+    for (const word of context.coreWords.slice(0, 2)) {
+      const related = await fetchRelatedWords(word);
+      if (related.length > 0) {
+        relatedWordsMap.set(word, related);
+        debug.steps.push(`Related to "${word}": ${related.slice(0, 5).join(', ')}`);
+      }
+    }
     
-    // Step 3: Add base keywords
+    // Base keywords (with main keyword priority)
+    const baseKeywords = extractBaseKeywords(mainKeyword, description || '', context, relatedWordsMap);
+    debug.steps.push(`Base keywords: ${baseKeywords.length}`);
+    
     baseKeywords.forEach((kw, index) => {
-      if (isValidKeyword(kw)) {
-        allKeywords.set(kw, 100 - index);
+      if (isValidKeyword(kw, allKeywords)) {
+        allKeywords.set(kw, 100 - index + randomVariance(5));
       }
     });
     
-    // Step 4: Generate variations
-    if (context.isDigital && context.mentionedFormats.length > 0) {
-      addDigitalVariations(allKeywords, context);
+    // Digital variations (main keyword priority)
+    addDigitalVariations(allKeywords, context, relatedWordsMap);
+    debug.steps.push(`After digital: ${allKeywords.size}`);
+    
+    // Events (holidays/seasons)
+    addEventKeywords(allKeywords, context, relatedWordsMap);
+    debug.steps.push(`After events: ${allKeywords.size}`);
+    
+    // Usage keywords
+    if (context.mentionedUsage.length > 0) {
+      addUsageKeywords(allKeywords, context);
+      debug.steps.push(`After usage: ${allKeywords.size}`);
     }
     
-    if (context.isPhysical || !context.isDigital) {
-      addPhysicalProductVariations(allKeywords, context);
-    }
+    // Smart combinations
+    addSmartCombinations(allKeywords, context, relatedWordsMap);
+    debug.steps.push(`After combinations: ${allKeywords.size}`);
     
-    // Step 5: Add event keywords
-    addEventKeywords(allKeywords, context);
-    
-    // Step 6: Add synonyms using WordNet
-    await addRelatedWords(allKeywords, context.mainNouns);
-    
-    // Step 7: Add combinations
-    addSmartCombinations(allKeywords, context);
-    
-    // Filter and return top 50
+    // Sort and deduplicate
     const keywords = Array.from(allKeywords.entries())
-      .filter(([keyword]) => isValidKeyword(keyword))
+      .filter(([keyword]) => isValidKeyword(keyword, new Map()))
       .sort((a, b) => b[1] - a[1])
       .map(([keyword]) => keyword)
       .slice(0, 50);
 
-    return res.status(200).json({ keywords });
+    // Final deduplication
+    const uniqueKeywords = Array.from(new Set(keywords));
+    debug.steps.push(`Final (after dedup): ${uniqueKeywords.length}`);
+    
+    return res.status(200).json({ keywords: uniqueKeywords, debug });
   } catch (error) {
-    console.error('Error generating keywords:', error);
-    return res.status(500).json({ error: 'Failed to generate keywords' });
+    console.error('Error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to generate keywords',
+      details: error.message 
+    });
   }
 }
 
-// Helper Functions
+function randomVariance(range) {
+  return Math.floor(Math.random() * range * 2) - range;
+}
+
+function shuffleArray(array) {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
 
 function detectContext(mainKeyword, description) {
   const fullText = `${mainKeyword} ${description}`.toLowerCase();
   
   const mentionedFormats = KEYWORD_CATEGORIES.fileFormats.filter(f => 
     fullText.includes(f)
+  );
+  
+  const mentionedStyles = KEYWORD_CATEGORIES.craftStyles.filter(s =>
+    fullText.includes(s)
+  );
+  
+  const mentionedUsage = KEYWORD_CATEGORIES.usage.filter(u =>
+    fullText.includes(u)
   );
   
   const hasDigitalKeywords = 
@@ -134,229 +181,245 @@ function detectContext(mainKeyword, description) {
     fullText.includes('clipart') ||
     fullText.includes('graphic');
   
-  const hasPhysicalKeywords = KEYWORD_CATEGORIES.physicalProductTypes.some(p =>
-    fullText.includes(p)
-  );
+  // Extract CORE words from main keyword (these are priority)
+  const coreWords = mainKeyword.toLowerCase()
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !FILLER_WORDS.has(w));
   
-  // Use compromise to extract nouns and adjectives
-  const doc = compromise(fullText);
-  const mainNouns = doc.nouns().out('array').filter(n => n.length > 2 && !FILLER_WORDS.has(n));
-  const mainAdjectives = doc.adjectives().out('array').filter(a => a.length > 2);
+  // Extract additional words from description (secondary)
+  const descWords = description.toLowerCase()
+    .split(/[\s,\.!?;]+/)
+    .map(w => w.trim())
+    .filter(w => 
+      w.length > 3 && 
+      !FILLER_WORDS.has(w) &&
+      !KEYWORD_CATEGORIES.fileFormats.includes(w) &&
+      !coreWords.includes(w)
+    )
+    .slice(0, 3);
+  
+  // If no formats mentioned, use defaults (but prioritize mentioned ones)
+  const formats = mentionedFormats.length ? mentionedFormats : KEYWORD_CATEGORIES.fileFormats.slice(0, 3);
+  const styles = mentionedStyles.length ? mentionedStyles : [];
   
   return {
     isDigital: hasDigitalKeywords,
-    isPhysical: hasPhysicalKeywords,
-    mentionedFormats,
-    mainNouns: Array.from(new Set(mainNouns)),
-    mainAdjectives: Array.from(new Set(mainAdjectives)),
-    productType: hasDigitalKeywords && !hasPhysicalKeywords ? 'digital' :
-                 hasPhysicalKeywords && !hasDigitalKeywords ? 'physical' : 'mixed'
+    coreWords, // Main keyword words - HIGHEST PRIORITY
+    descWords, // Secondary words from description
+    mentionedFormats: formats,
+    mentionedStyles: styles,
+    mentionedUsage,
+    hasBundle: fullText.includes('bundle') || fullText.includes('set'),
+    hasCollection: fullText.includes('collection') || fullText.includes('pack')
   };
 }
 
-function extractBaseKeywords(mainKeyword, description, context) {
+function extractBaseKeywords(mainKeyword, description, context, relatedWordsMap) {
   const keywords = new Set();
-  const fullText = `${mainKeyword}. ${description}`;
   
+  // 1. Main keyword itself
   keywords.add(mainKeyword.toLowerCase().trim());
   
-  const doc = compromise(fullText);
-  const nounPhrases = doc.match('#Adjective? #Noun+').out('array');
-  
-  nounPhrases.forEach(phrase => {
-    const cleaned = phrase.toLowerCase().trim();
-    if (cleaned.split(' ').length >= 2 && cleaned.split(' ').length <= 3) {
-      keywords.add(cleaned);
-    }
-  });
-  
-  context.mainNouns.forEach((noun, i) => {
-    context.mainAdjectives.forEach(adj => {
-      keywords.add(`${adj} ${noun}`);
-    });
+  // 2. Core word combinations (PRIORITY)
+  context.coreWords.forEach((word, i) => {
+    // Each core word standalone
+    keywords.add(word);
     
-    if (i < context.mainNouns.length - 1) {
-      keywords.add(`${noun} ${context.mainNouns[i + 1]}`);
+    // Core word pairs
+    if (i < context.coreWords.length - 1) {
+      keywords.add(`${word} ${context.coreWords[i + 1]}`);
     }
+    
+    // Core word with formats
+    context.mentionedFormats.slice(0, 3).forEach(format => {
+      keywords.add(`${word} ${format}`);
+    });
   });
   
-  return Array.from(keywords).slice(0, 15);
+  // 3. Related words with core words (using DataMuse)
+  context.coreWords.forEach(coreWord => {
+    const related = relatedWordsMap.get(coreWord) || [];
+    related.slice(0, 5).forEach(relatedWord => {
+      // Related word + other core words
+      context.coreWords.forEach(otherCore => {
+        if (otherCore !== coreWord) {
+          keywords.add(`${relatedWord} ${otherCore}`);
+        }
+      });
+      
+      // Related word + formats
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        keywords.add(`${relatedWord} ${format}`);
+      });
+    });
+  });
+  
+  // 4. Styles with core words
+  context.mentionedStyles.forEach(style => {
+    context.coreWords.forEach(word => {
+      keywords.add(`${style} ${word}`);
+    });
+  });
+  
+  return Array.from(keywords);
 }
 
-function addDigitalVariations(allKeywords, context) {
-  const mainWords = context.mainNouns.slice(0, 3);
-  
-  mainWords.forEach(word => {
+function addDigitalVariations(allKeywords, context, relatedWordsMap) {
+  // PRIORITY: Core words must appear
+  context.coreWords.forEach(coreWord => {
+    // Core word + all formats
     context.mentionedFormats.forEach(format => {
-      const keyword = `${word} ${format}`;
+      const keyword = `${coreWord} ${format}`;
       if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 85);
+        allKeywords.set(keyword, 90 + randomVariance(5));
       }
     });
-  });
-  
-  mainWords.forEach(word => {
-    KEYWORD_CATEGORIES.productTypes.slice(0, 5).forEach(type => {
-      const keyword = `${word} ${type}`;
+    
+    // Core word + product types
+    KEYWORD_CATEGORIES.productTypes.forEach(type => {
+      const keyword = `${coreWord} ${type}`;
       if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 75);
+        allKeywords.set(keyword, 85 + randomVariance(5));
       }
     });
-  });
-  
-  mainWords.forEach(word => {
-    KEYWORD_CATEGORIES.digitalProducts.slice(0, 4).forEach(product => {
-      const keyword = `${word} ${product}`;
+    
+    // Core word + digital products
+    KEYWORD_CATEGORIES.digitalProducts.slice(0, 6).forEach(product => {
+      const keyword = `${coreWord} ${product}`;
       if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
-        allKeywords.set(keyword, 70);
-      }
-    });
-  });
-}
-
-function addPhysicalProductVariations(allKeywords, context) {
-  const mainWords = context.mainNouns.slice(0, 3);
-  
-  mainWords.forEach(word => {
-    KEYWORD_CATEGORIES.qualities.slice(0, 6).forEach(quality => {
-      const keyword = `${quality} ${word}`;
-      if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 80);
+        allKeywords.set(keyword, 80 + randomVariance(5));
       }
     });
   });
   
-  mainWords.forEach(noun => {
-    context.mainAdjectives.slice(0, 4).forEach(adj => {
-      const keyword = `${adj} ${noun}`;
-      if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 78);
-      }
-    });
-  });
-}
-
-function addEventKeywords(allKeywords, context) {
-  const mainWords = context.mainNouns.slice(0, 2);
-  
-  mainWords.forEach(word => {
-    KEYWORD_CATEGORIES.holidays.slice(0, 8).forEach(holiday => {
-      const keyword1 = `${word} ${holiday}`;
-      const keyword2 = `${holiday} ${word}`;
-      
-      if (!allKeywords.has(keyword1)) allKeywords.set(keyword1, 65);
-      if (!allKeywords.has(keyword2)) allKeywords.set(keyword2, 65);
-    });
-  });
-  
-  mainWords.forEach(word => {
-    KEYWORD_CATEGORIES.seasons.forEach(season => {
-      const keyword = `${season} ${word}`;
-      if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 60);
-      }
-    });
-  });
-  
-  mainWords.forEach(word => {
-    KEYWORD_CATEGORIES.occasions.slice(0, 6).forEach(occasion => {
-      const keyword = `${word} ${occasion}`;
-      if (!allKeywords.has(keyword)) {
-        allKeywords.set(keyword, 58);
-      }
-    });
-  });
-}
-
-async function addRelatedWords(allKeywords, mainNouns) {
-  const wordnet = new natural.WordNet();
-  
-  for (const noun of mainNouns.slice(0, 2)) {
-    try {
-      const lookupResults = await new Promise((resolve) => {
-        wordnet.lookup(noun, (results) => {
-          resolve(results || []);
-        });
-      });
-      
-      const synonyms = new Set();
-      lookupResults.forEach(result => {
-        if (result.synonyms) {
-          result.synonyms.forEach(syn => {
-            const cleaned = syn.toLowerCase().replace(/_/g, ' ').trim();
-            if (cleaned !== noun && cleaned.length > 2 && !cleaned.includes('(')) {
-              synonyms.add(cleaned);
-            }
-          });
+  // Related words variations
+  context.coreWords.forEach(coreWord => {
+    const related = relatedWordsMap.get(coreWord) || [];
+    related.slice(0, 3).forEach(relatedWord => {
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        const keyword = `${relatedWord} ${format}`;
+        if (!allKeywords.has(keyword)) {
+          allKeywords.set(keyword, 75 + randomVariance(5));
         }
       });
-      
-      Array.from(synonyms).slice(0, 3).forEach(syn => {
-        const keyword = `${syn} ${mainNouns[0]}`;
-        if (!allKeywords.has(keyword) && isValidKeyword(keyword)) {
-          allKeywords.set(keyword, 55);
-        }
-      });
-    } catch (error) {
-      console.log(`WordNet lookup failed for: ${noun}`);
-    }
+    });
+  });
+  
+  // Only add bundle/collection if mentioned
+  if (context.hasBundle) {
+    context.coreWords.forEach(word => {
+      allKeywords.set(`${word} bundle`, 85 + randomVariance(5));
+    });
+  }
+  
+  if (context.hasCollection) {
+    context.coreWords.forEach(word => {
+      allKeywords.set(`${word} collection`, 85 + randomVariance(5));
+    });
   }
 }
 
-function addSmartCombinations(allKeywords, context) {
-  const mainWords = context.mainNouns.slice(0, 2);
+function addEventKeywords(allKeywords, context, relatedWordsMap) {
+  // Holidays with CORE words (priority)
+  context.coreWords.forEach(coreWord => {
+    shuffleArray(KEYWORD_CATEGORIES.holidays).slice(0, 8).forEach(holiday => {
+      allKeywords.set(`${coreWord} ${holiday}`, 70 + randomVariance(5));
+      allKeywords.set(`${holiday} ${coreWord}`, 70 + randomVariance(5));
+    });
+  });
   
-  if (context.isDigital && context.mentionedFormats.length > 0) {
-    mainWords.forEach(noun => {
-      context.mainAdjectives.slice(0, 2).forEach(adj => {
-        context.mentionedFormats.slice(0, 2).forEach(format => {
-          const keyword = `${adj} ${noun} ${format}`;
-          if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
-            allKeywords.set(keyword, 66);
-          }
-        });
+  // Seasons with core words
+  context.coreWords.forEach(coreWord => {
+    KEYWORD_CATEGORIES.seasons.forEach(season => {
+      allKeywords.set(`${season} ${coreWord}`, 65 + randomVariance(5));
+    });
+  });
+  
+  // Occasions with core words
+  context.coreWords.forEach(coreWord => {
+    shuffleArray(KEYWORD_CATEGORIES.occasions).slice(0, 6).forEach(occasion => {
+      allKeywords.set(`${coreWord} ${occasion}`, 65 + randomVariance(5));
+    });
+  });
+  
+  // Related words with holidays (secondary)
+  context.coreWords.forEach(coreWord => {
+    const related = relatedWordsMap.get(coreWord) || [];
+    related.slice(0, 2).forEach(relatedWord => {
+      KEYWORD_CATEGORIES.holidays.slice(0, 3).forEach(holiday => {
+        allKeywords.set(`${relatedWord} ${holiday}`, 60 + randomVariance(5));
+      });
+    });
+  });
+}
+
+function addUsageKeywords(allKeywords, context) {
+  context.coreWords.forEach(coreWord => {
+    context.mentionedUsage.forEach(usage => {
+      allKeywords.set(`${coreWord} ${usage}`, 75 + randomVariance(5));
+    });
+  });
+}
+
+function addSmartCombinations(allKeywords, context, relatedWordsMap) {
+  // 3-word combinations with CORE words
+  context.coreWords.forEach(coreWord => {
+    // Style + core + format
+    context.mentionedStyles.slice(0, 2).forEach(style => {
+      context.mentionedFormats.slice(0, 3).forEach(format => {
+        const keyword = `${style} ${coreWord} ${format}`;
+        if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
+          allKeywords.set(keyword, 72 + randomVariance(5));
+        }
       });
     });
     
-    mainWords.forEach(noun => {
-      KEYWORD_CATEGORIES.productTypes.slice(0, 2).forEach(type => {
-        context.mentionedFormats.slice(0, 2).forEach(format => {
-          const keyword = `${noun} ${type} ${format}`;
+    // Core + type + format
+    KEYWORD_CATEGORIES.productTypes.slice(0, 3).forEach(type => {
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        const keyword = `${coreWord} ${type} ${format}`;
+        if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
+          allKeywords.set(keyword, 70 + randomVariance(5));
+        }
+      });
+    });
+  });
+  
+  // Related word combos
+  context.coreWords.forEach(coreWord => {
+    const related = relatedWordsMap.get(coreWord) || [];
+    related.slice(0, 2).forEach(relatedWord => {
+      context.mentionedFormats.slice(0, 2).forEach(format => {
+        KEYWORD_CATEGORIES.productTypes.slice(0, 2).forEach(type => {
+          const keyword = `${relatedWord} ${type} ${format}`;
           if (!allKeywords.has(keyword) && !hasDuplicateFormats(keyword)) {
-            allKeywords.set(keyword, 64);
+            allKeywords.set(keyword, 68 + randomVariance(5));
           }
         });
       });
     });
-  } else {
-    mainWords.forEach(noun => {
-      context.mainAdjectives.slice(0, 2).forEach(adj => {
-        KEYWORD_CATEGORIES.qualities.slice(0, 2).forEach(quality => {
-          const keyword = `${quality} ${adj} ${noun}`;
-          if (!allKeywords.has(keyword)) {
-            allKeywords.set(keyword, 64);
-          }
-        });
-      });
-    });
-  }
+  });
 }
 
-function isValidKeyword(keyword) {
-  const words = keyword.trim().split(/\s+/);
+function isValidKeyword(keyword, existingKeywords) {
+  const words = keyword.trim().toLowerCase().split(/\s+/);
   
-  if (words.length < 2) return false;
+  if (words.length < 1) return false;
+  if (words.length > 4) return false;
   if (keyword.length > 80) return false;
+  
+  // Check for duplicate words in the keyword
+  const wordSet = new Set(words);
+  if (wordSet.size !== words.length) return false; // Has duplicate words
+  
+  // Check if already exists
+  if (existingKeywords.has(keyword.toLowerCase())) return false;
+  
+  // Check for duplicate formats
   if (hasDuplicateFormats(keyword)) return false;
   
-  const nonFillerWords = words.filter(w => !FILLER_WORDS.has(w.toLowerCase()));
+  const nonFillerWords = words.filter(w => !FILLER_WORDS.has(w));
   if (nonFillerWords.length === 0) return false;
-  
-  const wordCounts = new Map();
-  words.forEach(w => {
-    wordCounts.set(w, (wordCounts.get(w) || 0) + 1);
-  });
-  if (Array.from(wordCounts.values()).some(count => count >= 3)) return false;
   
   return true;
 }
