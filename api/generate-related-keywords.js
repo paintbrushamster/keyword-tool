@@ -4,11 +4,11 @@
 
 const KEYWORD_CATEGORIES = {
   keywordTypes: [
-    'svg', 'png', 'jpg', 'jpeg', 'pdf', 'eps', 'psd', 'dxf', // fileFormats
-    'clipart', 'graphic', 'design', 'illustration', 'template', 'mockup', // productTypes
+    'svg', 'png', 'jpg', 'jpeg',
+    'clipart', 'graphic', 'design', 'illustration', // productTypes
     'digital download', 'instant download', 'printable', 'digital file',
     'cricut', 'silhouette', 'sublimation',
-    'cricut design', 'silhouette cameo', 'cut file', 'cutting file',
+    'cricut design', 'cut file', 'cutting file',
     'cricut file'
   ],
   craftStyles: [
