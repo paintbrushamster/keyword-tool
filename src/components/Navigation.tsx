@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Sparkles } from 'lucide-react';
+import { Search, Sparkles, Tag } from 'lucide-react';
 import './Navigation.css';
 
 interface NavigationProps {
@@ -12,24 +12,32 @@ const Navigation: React.FC<NavigationProps> = ({ currentPage, onNavigate }) => {
     <nav className="main-navigation">
       <div className="container nav-container">
         <div className="nav-brand">
-          <h1 className="nav-logo">KeywordPro</h1>
-          <span className="nav-tagline">SEO Keyword Research Tool</span>
+          <h1 className="nav-logo">EtsyKeyword</h1>
+          <span className="nav-tagline">Etsy Keyword Research & SEO Tool</span>
         </div>
 
         <div className="nav-links">
           <button
-            onClick={() => onNavigate('main')}
-            className={`nav-link ${currentPage === 'main' ? 'active' : ''}`}
+            onClick={() => onNavigate('search')}
+            className={`nav-link ${currentPage === 'search' ? 'active' : ''}`}
           >
             <Search size={18} />
-            <span>Keyword Research</span>
+            <span>Keyword Search</span>
+          </button>
+
+          <button
+            onClick={() => onNavigate('optimizer')}
+            className={`nav-link ${currentPage === 'optimizer' ? 'active' : ''}`}
+          >
+            <Sparkles size={18} />
+            <span>AI Optimizer</span>
           </button>
 
           <button
             onClick={() => onNavigate('related')}
             className={`nav-link ${currentPage === 'related' ? 'active' : ''}`}
           >
-            <Sparkles size={18} />
+            <Tag size={18} />
             <span>Related Keywords</span>
           </button>
         </div>

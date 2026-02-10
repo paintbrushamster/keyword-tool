@@ -1,22 +1,25 @@
 import { useState } from 'react';
 import Navigation from './components/Navigation';
-import KeywordResearchTool from './components/KeywordResearchTool';
+import KeywordSearch from './components/KeywordSearch';
+import AiOptimizer from './components/AiOptimizer';
 import RelatedKeywordsTest from './components/RelatedKeywordsTest';
 
-type Page = 'main' | 'related';
+type Page = 'search' | 'optimizer' | 'related';
 
 function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('main');
+  const [currentPage, setCurrentPage] = useState<Page>('search');
 
   return (
     <div className="app">
-      <Navigation 
-        currentPage={currentPage} 
-        onNavigate={(page) => setCurrentPage(page as Page)} 
+      <Navigation
+        currentPage={currentPage}
+        onNavigate={(page) => setCurrentPage(page as Page)}
       />
-      
+
       <main>
-        {currentPage === 'main' ? <KeywordResearchTool /> : <RelatedKeywordsTest />}
+        {currentPage === 'search' && <KeywordSearch />}
+        {currentPage === 'optimizer' && <AiOptimizer />}
+        {currentPage === 'related' && <RelatedKeywordsTest />}
       </main>
     </div>
   );
